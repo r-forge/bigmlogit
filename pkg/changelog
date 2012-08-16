@@ -1,0 +1,7 @@
+version 0.1-3
+	* fitted values are now stored in a specific data base
+	
+version 0.1-0 :
+	
+	* initial version of bigmlogit
+	

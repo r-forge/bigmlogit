@@ -1,0 +1,6 @@
+export(bigmlogit)
+import(Formula)
+import(maxLik)
+import(RSQLite)
+S3method("mean", "bigmlogit")
+S3method("predict", "bigmlogit")

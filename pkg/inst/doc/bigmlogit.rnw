@@ -1,0 +1,545 @@
+\documentclass[nojss]{jss}
+\usepackage{rotating}
+\usepackage{amsmath}
+\usepackage{wasysym}
+
+\usepackage{amssymb, amsfonts}
+
+%\VignetteIndexEntry{Multinomial logit models for big data sets: The bigmlogit Package}
+%\VignetteDepends{Formula, maxLik, RSQLite}
+%\VignetteKeywords{discrete choice modeling, big data sets, econometric computing, R}
+%\VignettePackage{bigmlogit}
+
+\title{Multinomial logit models for big data sets: The \pkg{bigmlogit} Package}
+
+\Plaintitle{Multinomial logit models for big data sets: The bigmlogit Package}
+
+\author{ Yves Croissant\\Universit\'e de la R\'eunion}
+
+\Plainauthor{Yves Croissant}
+
+\Address{
+Yves Croissant\\
+Facult\'e de Droit et d'Economie\\
+Universit\'e de la R\'eunion\\
+15, avenue Ren\'e Cassin\\
+BP 7151\\
+F-97715 Saint-Denis Messag Cedex 9\\
+Telephone: +33/262/938446\\
+E-mail: \email{yves.croissant@univ-reunion.fr}
+}
+
+%% need no \usepackage{Sweave.sty}
+
+\Abstract{ \pkg{bigmlogit} is a package for \proglang{R} enabling the
+  estimation of the multinomial logit model for data sets with
+  numerous observations and alternatives}
+
+\Keywords{discrete choice modeling, multinomial logit model, maximum
+  likelihood estimation,\proglang{R}.}
+
+\Plainkeywords{discrete choice modeling, multinomial logit model,
+  maximum likelihood estimation, R.}
+
+\begin{document}
+
+<<echo=FALSE,results=hide>>=
+options(prompt= "R> ", useFancyQuotes = FALSE)
+@
+
+This document describes the implementation of an algorithm for the
+estimation of the multinomial logit model for big data sets. It
+doesn't describe the multinomial logit model \emph{per se}, which is
+done in details in the vignette of the \pkg{mlogit} package. In this
+paper, we'll shortly describe how the model is implemented for
+``normal'' data sets in the \pkg{mlogit} package
+\citep{CROI:11}. We'll then, using example of artifactual data,
+explain what we mean by ``big'' data set. Finally, the features of the
+\pkg{bigmlogit} package, which implements the estimation of the
+multinomial logit model for ``big'' data sets are described.
+
+\section{Implementation of the multinomial logit model in the mlogit
+  package}
+
+The multinomial logit model is a discrete choice model, in which $n$
+individuals have to make a choice among $J$ mutually exclusive
+alternatives. It is customary to separate covariates in two sets :
+
+\begin{itemize}
+\item alternative-specific covariates, which are denoted $x_{ij}$,
+  which means that they depend on the alternatives \emph{and} on the
+  individual,
+\item individual-specific covariate denoted $z_i$.
+\end{itemize}
+
+To store such data, several strategies can be used. To see how, let's
+consider a classical transport model with 2 individuals and 3
+alternatives. The covariates are time and cost on the one hand, and
+age and income on the other hand. For now, if one wants to use a
+tabular representation of the data, there are two possibilities :
+
+\begin{itemize}
+\item the first one is to use a ``wide'' format, \emph{i.e.} there is
+  one line for each alternative for every choice situation,
+\item the second one is to use a ``long'' format, \emph{i.e.} there is one
+  line for each choice situation.
+\end{itemize}
+
+The ``wide''and the ``long'' format are illustrated below :
+
+<<echo = FALSE>>=
+age <- c(25, 43)
+income <- c(13, 24)
+time <- c(20, 12, 14, 30, 28, 19)
+cost <- c(2, 1, 1, 3, 2, 1)
+longData <- data.frame(ind = rep(1:2, each = 3),
+                       alt = rep(c('car', 'bus', 'train'), 2),
+                       choice = c(FALSE, TRUE, FALSE, TRUE, FALSE, FALSE),
+                       age = rep(age, each = 3), income = rep(income, each = 3),
+                       time = time, cost = cost)
+rownames(longData) <- paste(rep(c('car', 'bus', 'train'), 2), rep(1:2, each = 3), sep = ".")
+longData
+@ 
+
+<<echo = FALSE>>=
+wideData <- data.frame(ind = 1:2, age = age, income = income, 
+                       time.car = time[c(1, 4)], time.bus = time[c(2, 5)], time.train = time[c(3, 6)],
+                       cost.car = cost[c(1, 4)], cost.bus = cost[c(2, 5)], cost.train = cost[c(3, 6)])
+wideData                      
+@ 
+
+One can see that, if both sets of covariates are present, the two
+formats are inefficients in terms of data storage :
+\begin{itemize}
+\item in long format, individual-specific variables are repeated $J$
+  times,
+\item in wide format, there are numerous columns if there are a lot of
+  alternative specific variables and a lot of alternatives.
+\end{itemize}
+
+The \pkg{mlogit} package is mostly intended for settings where there
+are alternative-specific covariates, in the tradition of the so-called
+``conditional logit model'' of Daniel McFadden ; therefore, the
+``long'' format is used.
+
+In the computation of the likelihood, the data frame is then splited
+by alternative using the \code{split} function :
+
+<<>>=
+listData <- split(longData[, 3:6], longData$alt)
+listData
+@ 
+
+This list format is very convenient to perform the computations for
+the construction of the likelihood function.
+
+The computation of the model matrix is much simply performed using an
+extended formula / data interface, using the \pkg{Formula} package
+\citep{ZEIL:CROI:10} which enables the use of multi-part formulas :
+
+<<>>=
+##  library("Formula")
+##  library("maxLik")
+##  library("RSQLite")
+## library("mlogit")
+##  source("../../R/lnl.R")
+##  source("../../R/bigmlogit.R")
+library("bigmlogit")
+aForm <- mFormula(choice ~ cost | age + income | time)
+aData <- mlogit.data(longData, shape = "long", choice = "choice", 
+                     alt.var = "alt", chid.var = "ind")
+X <- model.matrix(aForm, aData)
+X
+@ 
+
+This \pkg{Formula} interface enables to construct three sets of
+covariates :
+
+\begin{itemize}
+\item alternative-specific covariates with generic coefficients,
+\item individual-specific covariates,
+\item alternative-specific covariates with alternative-specific
+  coefficients.
+\end{itemize}
+
+and to construct accordingly the relevant model matrix, which can then
+be splited as a list for subsequent computations.
+
+\section{Multinomial logit model for big data sets}
+
+The preceding approach is suitable for the estimation of a
+multinomial logit model on small or medium sized data set. We now
+address the issue of estimating such a model on big data set ; by big,
+we mean : 
+
+\begin{itemize}
+\item a large number of individuals $n$, say a few millions,
+\item a lot of alternatives $J$, typically several dozens.
+\end{itemize}
+
+The first issue induces problems of memory. The whole data can not be
+loaded at once and the solution is then to cut the data on smaller
+pieces that can be loaded in memory and to construct the likelihood
+function by adding at each iteration the contribution of the
+chunk. This can best be done using a data base management software and
+an R package which ensures the communication between the data base and
+R. Several R packages offer these functionalities. We use in the
+\pkg{bigmlogit} package the \pkg{DBI} \citep{DBI:09} and the
+\pkg{RSQLite} \citep{JAMES:11} packages :
+
+\begin{itemize}
+\item \pkg{DBI} provides virtual classes for the communication between
+  \pkg{R} and relational database management systems,
+\item \pkg{RSQLite} provides specific implementations of these classes
+  for \proglang{SQLite} (and the \proglang{SQLite} software itself).
+\end{itemize}
+
+The \proglang{SQLite} sotware has been chosen mostly by convenience :
+it is a free software, it is much simpler to manage than more complete
+and complex database management systems and, furthermore, it is
+provided with the \pkg{RSQLite} package so that no supplementary
+installation is required.
+
+The second issue is of a very different nature, it deals with the
+specification of the model. In a normal-sized model, $J-1$ parameters
+for every individual-specific covariates and $J-1$ intercepts are
+estimated, which means in the preceeding example 6 coefficients
+(income.bus, income.train, age.bus, age.train, intercept.bus,
+intercept.train, car being the base alternative). Moreover, for
+alternative-specific covariates, each covariate consist on $J$ vectors
+of length $n$.
+
+For large data sets, the covariates are better described by the
+following categories :
+
+\begin{itemize}
+\item pure alternative-specific covariates $x_j$,
+\item pure individual-specific covariates $z_i$,
+\item ``mixed'' covariates that depends on both the alternative and
+  the individual, although they are usually defined by small sets of
+  values, \emph{ie} there are much fewer than $J\times n$ distinct
+  values.
+\end{itemize}
+
+Pure alternative-specific covariates are generally not used in
+normal-sized models because their coefficients can't be identified if
+there are intercepts.
+
+Pure individual-specific covariates can be used in normal-sized and in
+large-sized models, but in a different manner ; it's relevant to
+estimate $J-1$ coefficients for every individual-specific covariate in
+normal-sized models, but for large-sized models with a lot of
+alternatives, it is more suitable to estimate coefficients for these
+variables in interaction with alternative-specific variables.
+
+General ``mixed'' covariates can hardly be managed in large-sized
+models. For these covariates, each individual belongs to a category
+(in a small set) and, for each category, there is a specific value for
+every alternative.
+
+The formula interface is radically different from the one used in the
+\pkg{mlogit} package. This is also a three-part formula :
+
+\begin{itemize}
+\item the first part contains ``pure'' alternative-specific
+  covariates,
+\item the second part contains ``pure'' individual-specific
+  covariates,
+\item the third part contains the ``mixed'' covariates.
+\end{itemize}
+
+The covariates used in the estimation are the alternative-specific
+covariates, their interactions with every individual-specific
+covariates and the mixed covariates.
+
+To illustrate that, we'll develop a complete example of choice of an
+hospital. In this example, much of the features of the \pkg{bigmlogit}
+code will be emphased. The covariates are the following :
+
+\begin{description}
+\item[size] the number of beds in the hospital (in hundreds),
+\item[spec] the specialty of the hospital, a factor with levels
+  \code{"cardio", "neuro", "psy"},
+\item[age] the age of the individual,
+\item[income] the income of the individual, a factor with levels
+  \code{"high", "low"},
+\item[dist] the distance to the hospital ; this is measured by the
+  distance between the center of the zone where the individual
+  inhabits and the one where the hospital is (there are $L_1=8$ zones)
+\item[insur] the price of the insurance for the hospital ; this is
+  measured by the tariff practised by the insurance company of the
+  individual in the given hospital (there are $L_2=6$ companies)
+\end{description}
+
+The usual data frame is replaced by a set of tables, and with a lot of
+individuals, can best be stored in a data base. The following code
+create a connection to a \proglang{SQLite} data base, using
+the\pkg{RSQLite} package (and create the data base if necessary), and
+drop the tables if they exist.
+
+<<results = hide>>=
+library("RSQLite")
+con <- dbConnect(dbDriver("SQLite"), dbname = "Hospitals")
+z <- dbSendQuery(con, "drop table if exists individuals")  ; dbClearResult(z)
+z <- dbSendQuery(con, "drop table if exists alternatives") ; dbClearResult(z)
+z <- dbSendQuery(con, "drop table if exists zone")         ; dbClearResult(z)
+z <- dbSendQuery(con, "drop table if exists insur")        ; dbClearResult(z)
+z <- dbSendQuery(con, "drop table if exists fitted")        ; dbClearResult(z)
+@ 
+
+We first set the seed to obtain reproducable results, and then we set
+the dimension of the model, \emph{ie} the number of individuals ($n$),
+the number of the alternatives ($J$) and the size of the chunks and
+the number of chunks ($chunkSZ$ and $chunkNB$).
+
+<<>>=
+set.seed(20)
+J <- 10
+n <- 1E+03
+chunkSZ <- 1E+02
+chunkNB <- n / chunkSZ
+@ 
+
+<<>>=
+Z <- data.frame(size = round(runif(J) * 4, 2),
+                spec = factor(sample(1:3, J, replace = TRUE), 
+                  labels = c('cardio', 'neuro', 'psy')))
+head(Z)
+@ 
+
+To create the model matrix, we use the \pkg{Formula} package. The
+model matrix for the alternative-specific variables is constructed
+using the first part of the formula and the data frame just created.
+
+<<>>=
+library("Formula")
+Form <- Formula(y ~ size + spec | 
+                age  + income | 
+                zone + insurance)
+Zmat <- model.matrix(Form, Z, rhs = 1)[, -1, drop = FALSE]
+KZ <- ncol(Zmat)
+@ 
+
+We then create one data frame for every ``mixed covariates'', with one
+column for every alternative and one row for every value of the
+covariate :
+
+<<>>=
+L1 <- 10
+L2 <- 8
+zone <- data.frame(matrix(round(runif(L1 * J) * 5, 2), L1, J))
+colnames(zone) <- 1:J
+insur <- data.frame(matrix(round(runif(L2 * J), 2), L2, J))
+colnames(insur) <- 1:J
+@ 
+
+The three data frames we've just created are then stored in the data
+base.
+
+<<results = hide>>=
+dbWriteTable(con, "alternatives", Z,            row.names = FALSE)
+dbWriteTable(con, "zone",         zone,         row.names = FALSE)
+dbWriteTable(con, "insur",        insur,        row.names = FALSE)
+@ 
+
+Finally, we create and store the individual-specific variables and the
+response using chunks, because the whole sample can not be loaded in
+memory for large $J$ and $n$. The two individual-specific covariates
+are stored in a data frame called \texttt{X} ; in this data frame,
+there is also one variable for each ``mixed variable'' which indicates
+to which category the individuals belong to.
+
+The model matrix for each alternative \texttt{Xl} is constructed in
+two steps ; the first part of the model matrix is obtained by
+multiplying every individual-specific variable by every
+alternative-specific variable, the second part by adding the two
+``mixed'' covariates.
+
+To generate the response, we then generate first a vector of
+artifactual parameters $\beta$, we then compute the deterministic part
+of utility $V_{ij}=\beta^{\top}x_{ij}$, we add a Gumbel deviate to get
+the utility $U_{ij}=V_{ij}+\epsilon_{ij}$ and we select the
+alternative which has the highest level of utility.  The response
+\texttt{y} is then added to the individual data frame and stored in
+the data base.
+
+<<>>=
+Beta <- runif(11, min = -1, max = +1)
+for (l in 1:chunkNB){
+  X <- data.frame(age    = round(runif(chunkSZ), 2),
+                  income = factor(sample(1:2, chunkSZ, replace = TRUE), 
+                    labels = c('high', 'low')),
+                  zone   = sample(1:L1, chunkSZ, replace = TRUE),
+                  insur  = sample(1:L2, chunkSZ, replace = TRUE))
+  Xmat <- model.matrix(Form, X, rhs = 2)
+  KX <- ncol(Xmat)
+  Xm <- c()
+  for (i in 1: KZ) Xm <- cbind(Xm, Xmat)
+  Xl <- lapply(seq_len(nrow(Zmat)),
+               function(i) rep(Zmat[i, ], each = chunkSZ * KX) * Xm)
+  Xl <- lapply(seq_len(J),
+               function(i) cbind(Xl[[i]],
+                                 zone = zone[X$zone, i],
+                                 insur = insur[X$insur, i])
+               )
+  V <- sapply(Xl, function(x) as.numeric(crossprod(t(x), Beta)))
+  EPS <- - log( - log(matrix(runif(chunkSZ * J), nrow = chunkSZ, ncol = J)))
+  U <- EPS + V
+  y <- apply(U, 1, function(x) which.max(x))
+  X <- cbind(X, choice = y)
+  dbWriteTable(con, "individuals", X, append = TRUE, 
+               overwrite = FALSE, row.names = FALSE)
+}
+dbDisconnect(con)
+@ 
+
+This setting ensures that the data storage is efficient, \emph{i.e.}
+there is no replication of any value, which is essential in a
+``large-sized'' data set.
+
+\section{Estimation of the multinomial logit model with big data}
+
+The estimation is performed using the \pkg{maxLik} package
+\citep{TOOM:HENN:11}. Among the numerous optimization algorithms
+available, the Newton-Rawlson algorithm is by far the most efficient
+because the likelihood function is concave and the computation of the
+analytical hessian is easy.
+
+The \pkg{bigmlogit} library is loaded using :
+
+<<>>=
+## library("bigmlogit")
+@ 
+
+<<eval = FALSE, echo = FALSE, results = hide>>=
+@ 
+
+The \pkg{bigmlogit} package provides the \code{bigmlogit} function
+which performs the estimation of the multinomial logit model for
+``big'' data sets. It has the following arguments :
+
+\begin{description}
+\item[formula] a symbolic description of the model to be estimated ; it
+  is coerced to a \code{Formula} object, which enables to write a
+  three-parts formula (one part for each set of covariates, as
+  previously described),
+\item[data] a \code{SQLiteConnection} object, a connection to the data
+  base which contains the variables in the model,
+\item[chunksize] the size of the chunks loaded in memory from the data base,
+\item[alternatives] if \code{NULL}, the alternative-specific
+  covariates data frame must be stored in the data base in a table
+  named ``alternatives'' ; otherwise, it is provided by this argument,
+\item[mixed] if \code{NULL}, each mixed covariate is stored as a table
+  in the data base ; otherwise, they are provided by this argument
+  which is a named list containing a data frame for every mixed
+  variable,
+\item[...] further arguments passed to \code{maxLik} ; this includes
+  \code{print.level} and \code{fixed}.
+\end{description}
+
+The model is first estimated using only one chunk, in order to obtain
+rapidly good starting value for the estimation on the whole sample.
+
+<<eval=TRUE>>=
+z <- bigmlogit(choice ~ size + spec | age + income | zone + insur, 
+               data = "Hospitals", chunksize = chunkSZ, print.level = 0, fitted = "ff")
+@ 
+
+We can there compare the estimated coefficients and the ``real''
+vector of coefficients \texttt{Beta} :
+
+<<eval=TRUE>>=
+coef(z)
+Beta
+@ 
+
+To get a more verbal estimation and to suppress some interactions, one
+can use the relevant arguments that are passed to \code{maxLik} :
+
+<<eval = TRUE>>=
+z2 <- bigmlogit(choice ~ size +spec | age + income | zone + insur, 
+               data = "Hospitals", chunksize = chunkSZ, print.level = 2, 
+               fixed = c("age:specneuro", "incomelow:size"))
+summary(z2)
+@ 
+
+Once the model is estimated, fitted values can be computed and
+predictions can be made using the \code{predict} function. The fitted
+values are not stored for every individual but the average fitted
+values are computed, which can be interpreted as market shares for the
+whole sample (if intercepts are estimated, the average fitted values
+are identically equal to the market shares).
+
+Fitted values can be easily extracted using the \code{fitted} method :
+
+<<>>=
+fv <- fitted(z)
+@ 
+
+and can be compared to the market shares that can be extracted from
+the fitted model using the \code{mean} method :
+
+<<>>=
+mean(z)
+@ 
+
+Predictions can be made by modifying the existing alternatives or by
+adding some new alternatives. Therefore, the new features of the
+alternatives must be provided to the \code{predict} function, which
+has therefore the following arguments :
+
+\begin{description}
+\item[object] a \code{bigmlogit} object, 
+\item[data] a \code{SQLiteConnection} object, a connection of the data
+  base which contain the variables in the model,
+\item[chunksize] the size of the chunks loaded in memory from the data base,
+\item[alternatives] an updated data frame containing the
+  alternative-specific covariates,
+\item[mixed] a named list containing an updated data frame for the
+  mixed variable,
+\item[print.level] the amont of information printed while computing
+  the predictions,
+\item[...] further arguments passed to \code{predict}.
+\end{description}
+
+To illustrate the use of the \code{predict} method, we'll add an
+eleventh alternative to the ten alternatives already available ; one
+line is then added to the alternatives data frame and a column is
+added to every mixed variable :
+
+<<>>=
+Z2 <- rbind(Z, list(3.2, 'cardio'))
+zone2 <- cbind(zone, '11' = runif(L1) * 3)
+insur2 <- cbind(insur, '11' = runif(L2))
+@ 
+
+These data frames are then passed to the \code{alternatives} and
+\code{mixed} arguments of the \code{predict} method :
+
+<<>>=
+pr <- predict(z, "Hospitals", alternatives = Z2, mixed = list(zone = zone2, insur = insur2))
+@ 
+
+We can see that the new alternative would have a market share of about
+7.84\%.
+
+
+<<results = hide, eval = FALSE>>=
+dbDisconnect(con)
+@ 
+
+\bibliography{bigmlogit}
+
+\end{document}
+
+%con <- dbConnect(dbDriver("SQLite"), dbname = "Hospitals");source("~/Forge/bigmlogit/pkg/R/bigmlogit.R");source("~/Forge/bigmlogit/pkg/R/lnl.R");z2 <- bigmlogit(choice ~ size + spec | age + income | zone + insur, data = con, chuksise = s, print.level = 3); dbDisconnect(con)
+
+
+<<eval=FALSE>>=
+con <- dbConnect(dbDriver("SQLite"), dbname = "Hospitals");za <- predict(z2, con, alternatives=z, mixed=list(zone=zone, insur=insur)); dbDisconnect(con)
+Z2 <- rbind(Z, list(3.2, 'cardio'))
+zone2 <- cbind(zone, '11' = runif(L1) * 3)
+insur2 <- cbind(insur, '11' = runif(L2))
+
+@ 
+
